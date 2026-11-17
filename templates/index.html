@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <title>Scopion</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%233B82F6'/%3E%3Cstop offset='1' stop-color='%231D4ED8'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='18' fill='url(%23g)'/%3E%3Ccircle cx='50' cy='50' r='22' fill='none' stroke='%23FFFFFF' stroke-width='7'/%3E%3Ccircle cx='50' cy='50' r='6' fill='%23FFFFFF'/%3E%3Cline x1='50' y1='18' x2='50' y2='30' stroke='%23FFFFFF' stroke-width='7' stroke-linecap='round'/%3E%3Cline x1='50' y1='70' x2='50' y2='82' stroke='%23FFFFFF' stroke-width='7' stroke-linecap='round'/%3E%3Cline x1='18' y1='50' x2='30' y2='50' stroke='%23FFFFFF' stroke-width='7' stroke-linecap='round'/%3E%3Cline x1='70' y1='50' x2='82' y2='50' stroke='%23FFFFFF' stroke-width='7' stroke-linecap='round'/%3E%3C/svg%3E">
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="/static/vendor/tailwindcss-play-3.4.17.js"></script>
+<script src="/static/vendor/chart.umd.min.js"></script>
 <script>
 tailwind.config = {
   theme: {
@@ -386,7 +386,7 @@ async function fetchSchema() {
       fillSelect('edit-proposal-status', dynamicSchema.scope_call_picklists.ProposalStatus);
       fillSelect('edit-call-status', dynamicSchema.scope_call_picklists.CallStatus);
       const stageFilter = document.getElementById('filter-stage');
-      STAGES.forEach(s => stageFilter.insertAdjacentHTML('beforeend', `<option value="${s}">${s}</option>`));
+      STAGES.forEach(s => stageFilter.insertAdjacentHTML('beforeend', `<option value="${escapeHTML(s)}">${escapeHTML(s)}</option>`));
     }
   } catch (e) {}
   fillSelect('edit-stage', STAGES);
@@ -447,7 +447,7 @@ function applyFilters() {
   const stage = document.getElementById('filter-stage').value;
   const source = document.getElementById('filter-source').value;
   const search = document.getElementById('search-input').value.trim().toLowerCase();
-  const today = new Date('2026-08-27');
+  const today = new Date();
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
   const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1);
   const nextMonthEnd = new Date(today.getFullYear(), today.getMonth() + 2, 1);
@@ -490,24 +490,30 @@ function renderTable() {
     const call = getScopeCall(p);
     const checked = selectedIds.has(p.Id) ? 'checked' : '';
     return `
-    <tr class="border-b border-borderColor hover:bg-hoverBg cursor-pointer ${selectedProject && selectedProject.Id === p.Id ? 'bg-hoverBg' : ''}">
-      <td class="p-2" onclick="event.stopPropagation()"><input type="checkbox" ${checked} onclick="toggleRowSelection(${JSON.stringify(p.Id)}, this.checked)"></td>
-      <td class="p-2 text-textBright font-bold" onclick='selectProject(${JSON.stringify(p.Id)})'>${escapeHTML(p.Client.Name)}</td>
-      <td class="p-2" onclick='selectProject(${JSON.stringify(p.Id)})'>${escapeHTML(p.ServiceType)}</td>
-      <td class="p-2 text-right" onclick='selectProject(${JSON.stringify(p.Id)})'>$${Number(p.DealValue || 0).toLocaleString()}</td>
-      <td class="p-2 text-right text-accentGreen" onclick='selectProject(${JSON.stringify(p.Id)})'>$${Number(p.RetainerValue__c || 0).toLocaleString()}</td>
-      <td class="p-2" onclick='selectProject(${JSON.stringify(p.Id)})'>${escapeHTML(p.Stage)}</td>
-      <td class="p-2" onclick='selectProject(${JSON.stringify(p.Id)})'>${escapeHTML(p.TargetDeliveryDate)}</td>
-      <td class="p-2" onclick='selectProject(${JSON.stringify(p.Id)})'>${riskBadge(call.RiskLevel)}</td>
-      <td class="p-2" onclick='selectProject(${JSON.stringify(p.Id)})'>${escapeHTML(call.CallStatus || '--')}</td>
-      <td class="p-2 col-source hidden" onclick='selectProject(${JSON.stringify(p.Id)})'>${escapeHTML(p.LeadSource || '--')}</td>
-      <td class="p-2 col-contract hidden" onclick='selectProject(${JSON.stringify(p.Id)})'>${escapeHTML(p.ContractStatus || '--')}</td>
-      <td class="p-2 col-proposal hidden" onclick='selectProject(${JSON.stringify(p.Id)})'>${escapeHTML(call.ProposalStatus || '--')}</td>
-      <td class="p-2 text-textMuted max-w-[220px] truncate" title="${escapeHTML(p.NextStep)}" onclick='selectProject(${JSON.stringify(p.Id)})'>${escapeHTML(p.NextStep)}</td>
+    <tr data-id="${escapeHTML(p.Id)}" class="border-b border-borderColor hover:bg-hoverBg cursor-pointer ${selectedProject && selectedProject.Id === p.Id ? 'bg-hoverBg' : ''}">
+      <td class="p-2 select-cell"><input type="checkbox" ${checked} onclick="toggleRowSelection(this.closest('tr').dataset.id, this.checked)"></td>
+      <td class="p-2 text-textBright font-bold">${escapeHTML(p.Client.Name)}</td>
+      <td class="p-2">${escapeHTML(p.ServiceType)}</td>
+      <td class="p-2 text-right">$${Number(p.DealValue || 0).toLocaleString()}</td>
+      <td class="p-2 text-right text-accentGreen">$${Number(p.RetainerValue__c || 0).toLocaleString()}</td>
+      <td class="p-2">${escapeHTML(p.Stage)}</td>
+      <td class="p-2">${escapeHTML(p.TargetDeliveryDate)}</td>
+      <td class="p-2">${riskBadge(call.RiskLevel)}</td>
+      <td class="p-2">${escapeHTML(call.CallStatus || '--')}</td>
+      <td class="p-2 col-source hidden">${escapeHTML(p.LeadSource || '--')}</td>
+      <td class="p-2 col-contract hidden">${escapeHTML(p.ContractStatus || '--')}</td>
+      <td class="p-2 col-proposal hidden">${escapeHTML(call.ProposalStatus || '--')}</td>
+      <td class="p-2 text-textMuted max-w-[220px] truncate" title="${escapeHTML(p.NextStep)}">${escapeHTML(p.NextStep)}</td>
     </tr>`;
   }).join('');
   applyColumnVisibilityToDom();
 }
+
+document.getElementById('project-list').addEventListener('click', (e) => {
+  if (e.target.closest('.select-cell')) return;
+  const row = e.target.closest('tr[data-id]');
+  if (row) selectProject(row.dataset.id);
+});
 
 // --- Row selection & bulk actions ---
 function toggleRowSelection(id, checked) {
@@ -637,7 +643,7 @@ function openClosedWonBrief() {
   const wonProjects = rawProjects.filter(p => p.Stage === '6 - Closed Won');
   const years = [...new Set(wonProjects.map(p => (p.TargetDeliveryDate || '').slice(0, 4)))].filter(Boolean).sort();
   const yearSelect = document.getElementById('won-brief-year');
-  yearSelect.innerHTML = '<option value="All">All Years</option>' + years.map(y => `<option value="${y}">${y}</option>`).join('');
+  yearSelect.innerHTML = '<option value="All">All Years</option>' + years.map(y => `<option value="${escapeHTML(y)}">${escapeHTML(y)}</option>`).join('');
   document.getElementById('won-brief-scope').textContent = currentView.label;
   document.getElementById('won-brief-modal').classList.remove('hidden');
   renderWonBriefChart();
@@ -939,7 +945,7 @@ function renderCollaboratorResults(results, heading) {
   const container = document.getElementById('collaborator-results');
   if (results.length === 0) { container.innerHTML = heading ? '' : `<div class="text-textMuted p-2">No matching collaborators found.</div>`; return; }
   const rows = results.map(u => `
-    <div onclick='selectCollaboratorView(${JSON.stringify(u).replace(/'/g, "&#39;")})' class="flex justify-between items-center p-2 rounded hover:bg-hoverBg cursor-pointer">
+    <div data-id="${escapeHTML(u.Id)}" data-name="${escapeHTML(u.Name)}" onclick="selectCollaboratorView({ Id: this.dataset.id, Name: this.dataset.name })" class="flex justify-between items-center p-2 rounded hover:bg-hoverBg cursor-pointer">
       <span class="text-textBright font-bold">${escapeHTML(u.Name)}</span>
       <span class="text-textMuted">${escapeHTML(u.Email || '')}</span>
     </div>`).join('');
@@ -1034,7 +1040,13 @@ function exportAs(format) {
   const dateStamp = new Date().toISOString().slice(0, 10);
 
   if (format === 'csv') {
-    const csv = [cols.join(','), ...rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','))].join('\n');
+    // Prefix cells that a spreadsheet would treat as a formula (CSV injection).
+    const csvCell = v => {
+      let s = String(v ?? '');
+      if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
+      return `"${s.replace(/"/g, '""')}"`;
+    };
+    const csv = [cols.join(','), ...rows.map(r => r.map(csvCell).join(','))].join('\n');
     downloadBlob(csv, 'text/csv', `Scopion_Export_${dateStamp}.csv`);
   } else if (format === 'json') {
     const objects = rows.map(r => Object.fromEntries(cols.map((c, i) => [c, r[i]])));

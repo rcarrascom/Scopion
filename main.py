@@ -1,23 +1,105 @@
 import copy
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 import uvicorn
 
 import mock_data as data
 
-app = FastAPI()
+# Interactive API docs and the OpenAPI schema are not needed by the UI.
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+# Rejects requests whose Host header is not loopback (DNS-rebinding defence).
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 templates.env.filters["money"] = lambda v: f"{v:,.2f}" if isinstance(v, (int, float)) else "0.00"
 
 ID_RE = re.compile(r'^[a-zA-Z0-9_]{6,20}$')
+DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+STAGES = ["1 - Lead", "2 - Discovery Call", "3 - Proposal Sent", "4 - Scope Call", "5 - Negotiation", "6 - Closed Won", "7 - Closed Lost"]
+CONTRACT_STATUSES = ["Not Sent", "Sent", "Signed"]
+MAX_TEXT_LEN = 2000
+MAX_MONEY = 1_000_000_000
+MAX_BATCH = 500
+
+# Fields restricted to a fixed set of values, enforced server-side.
+PROJECT_CHOICES = {"Stage": STAGES, "ContractStatus": CONTRACT_STATUSES}
+SCOPE_CALL_CHOICES = dict(data.SCOPE_CALL_PICKLISTS)
+
+CSP = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+    "frame-ancestors 'none'; form-action 'self'"
+)
+
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    # State-changing requests must come from this same origin (CSRF defence).
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("origin")
+        if origin and origin != f"{request.url.scheme}://{request.headers.get('host', '')}":
+            return JSONResponse({"status": "error", "message": "Cross-origin request blocked."}, status_code=403)
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = CSP
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    return response
+
 
 def is_valid_id(value: str) -> bool:
     return bool(ID_RE.match(value or ""))
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+
+
+def _validate_value(field: str, value, kind: str, choices: dict):
+    """Returns the cleaned value, or raises ValueError with a user-facing message."""
+    if field in choices:
+        if value not in choices[field]:
+            raise ValueError(f"Invalid value for {field}.")
+        return value
+    if kind in ("currency", "number", "percent"):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{field} must be a number.")
+        upper = 100 if kind == "percent" else MAX_MONEY
+        if not 0 <= value <= upper:
+            raise ValueError(f"{field} is out of range.")
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be text.")
+    if kind == "date":
+        if value == "":
+            return value
+        try:
+            if not DATE_RE.match(value):
+                raise ValueError
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"{field} must be a YYYY-MM-DD date.") from None
+        return value
+    if len(value) > MAX_TEXT_LEN:
+        raise ValueError(f"{field} is too long.")
+    return value
+
+
+def _validate_payload(payload: dict, meta: dict, choices: dict) -> dict:
+    """Keeps only allowlisted fields and type/range-checks each one. All-or-nothing."""
+    return {
+        field: _validate_value(field, value, meta[field]["type"], choices)
+        for field, value in payload.items() if field in meta
+    }
 
 # In-memory working copy - /api/save mutates this, not the module-level data.
 # Resets to the original seed set on every restart: no real backing store,
@@ -64,7 +146,7 @@ async def shutdown_server():
 
 
 @app.get("/api/collaborators/search")
-async def search_collaborators(q: str = "", recommend: bool = False):
+async def search_collaborators(q: str = Query("", max_length=100), recommend: bool = False):
     if recommend:
         # No query typed yet - surface a couple of collaborators (not the
         # logged-in lead) so Look Up Collaborator has somewhere to start.
@@ -96,10 +178,10 @@ def _project_for_response(project: dict, target_ids: set) -> dict:
 
 
 @app.get("/api/projects")
-async def get_projects(collaborator_ids: str = None):
+async def get_projects(collaborator_ids: str = Query(None, max_length=500)):
     if collaborator_ids:
         target_ids = [i.strip() for i in collaborator_ids.split(",") if i.strip()]
-        if not target_ids or not all(is_valid_id(i) for i in target_ids):
+        if not target_ids or len(target_ids) > 25 or not all(is_valid_id(i) for i in target_ids):
             return {"status": "error", "message": "Invalid collaborator ID supplied for lookup."}
     else:
         target_ids = [LEAD_COLLABORATOR["Id"]]
@@ -111,10 +193,10 @@ async def get_projects(collaborator_ids: str = None):
 
 
 class ExtraFieldsRequest(BaseModel):
-    project_ids: list = []
-    project_fields: list = []
-    scope_call_ids: list = []
-    scope_call_fields: list = []
+    project_ids: list[str] = Field(default_factory=list, max_length=MAX_BATCH)
+    project_fields: list[str] = Field(default_factory=list, max_length=50)
+    scope_call_ids: list[str] = Field(default_factory=list, max_length=MAX_BATCH)
+    scope_call_fields: list[str] = Field(default_factory=list, max_length=50)
 
 
 @app.post("/api/projects/extra-fields")
@@ -240,16 +322,18 @@ async def get_qualification(project_id: str):
 
 
 class BulkStageRequest(BaseModel):
-    project_ids: list = []
-    stage: str
+    project_ids: list[str] = Field(default_factory=list, max_length=MAX_BATCH)
+    stage: str = Field(max_length=50)
 
 
 @app.post("/api/projects/bulk-stage")
 async def bulk_update_stage(req: BulkStageRequest):
+    if req.stage not in STAGES:
+        return {"status": "error", "message": "Invalid stage."}
     updated = 0
-    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+    now = _now()
     for project_id in req.project_ids:
-        if not is_valid_id(str(project_id)):
+        if not is_valid_id(project_id):
             continue
         project = _project_by_id.get(project_id)
         if not project:
@@ -261,10 +345,10 @@ async def bulk_update_stage(req: BulkStageRequest):
 
 
 class SaveRequest(BaseModel):
-    project_id: str
-    scope_call_id: str = None
-    project_payload: dict = {}
-    scope_call_payload: dict = {}
+    project_id: str = Field(max_length=20)
+    scope_call_id: str | None = Field(default=None, max_length=20)
+    project_payload: dict = Field(default_factory=dict)
+    scope_call_payload: dict = Field(default_factory=dict)
 
 
 @app.post("/api/save")
@@ -274,22 +358,22 @@ async def save_record(req: SaveRequest):
     project = _project_by_id.get(req.project_id)
     if not project:
         return {"status": "error", "message": "Project not found."}
+    if req.scope_call_id and not is_valid_id(req.scope_call_id):
+        return {"status": "error", "message": "Invalid Scope Call ID."}
 
-    valid_project = set(data.PROJECT_FIELD_META.keys())
-    for field, value in req.project_payload.items():
-        if field in valid_project:
-            project[field] = value
-    project["LastModifiedDate"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+    # Validate everything before mutating anything, so a bad field can't leave a half-applied save.
+    try:
+        project_updates = _validate_payload(req.project_payload, data.PROJECT_FIELD_META, PROJECT_CHOICES)
+        scope_call_updates = _validate_payload(req.scope_call_payload, data.SCOPE_CALL_FIELD_META, SCOPE_CALL_CHOICES)
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
 
-    if req.scope_call_id:
-        if not is_valid_id(req.scope_call_id):
-            return {"status": "error", "message": "Invalid Scope Call ID."}
-        scope_call = _scope_call_by_id.get(req.scope_call_id)
-        if scope_call:
-            valid_scope_call = set(data.SCOPE_CALL_FIELD_META.keys())
-            for field, value in req.scope_call_payload.items():
-                if field in valid_scope_call:
-                    scope_call[field] = value
+    project.update(project_updates)
+    project["LastModifiedDate"] = _now()
+
+    scope_call = _scope_call_by_id.get(req.scope_call_id) if req.scope_call_id else None
+    if scope_call:
+        scope_call.update(scope_call_updates)
 
     return {"status": "success"}
 

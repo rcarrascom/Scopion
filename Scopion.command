@@ -1,26 +1,36 @@
 #!/bin/bash
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$DIR"
+cd "$DIR" || exit 1
+
+PORT=8004
 
 echo "=================================================="
-echo "Starting Scopion (mock data, port 8004)..."
+echo "Starting Scopion (mock data, port $PORT)..."
 echo "=================================================="
 
-if [ ! -d "venv" ]; then
-    python3 -m venv venv
+# Recreate the virtual environment if it is missing or unusable (e.g. the project folder was renamed).
+if ! venv/bin/python -c "import sys" >/dev/null 2>&1; then
+    rm -rf venv
+    python3 -m venv venv || { echo "Could not create a virtual environment (is python3 installed?)."; exit 1; }
 fi
 
-source venv/bin/activate
-pip3 install -q fastapi uvicorn jinja2 pydantic
+venv/bin/python -m pip install -q -r requirements.txt || { echo "Dependency install failed."; exit 1; }
 
-lsof -ti:8004 | xargs kill -9 2>/dev/null
+# Only stop a previous Scopion server - never an unrelated process that happens to use the port.
+PID="$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null | head -n 1)"
+if [ -n "$PID" ]; then
+    if ps -p "$PID" -o command= | grep -q "uvicorn main:app"; then
+        kill "$PID" && sleep 1
+    else
+        echo "Port $PORT is in use by another program (PID $PID). Close it and run this again."
+        exit 1
+    fi
+fi
 
-echo "Booting up the local web server (port 8004)..."
-nohup venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8004 --log-level warning > /dev/null 2>&1 &
+echo "Booting up the local web server (127.0.0.1:$PORT)..."
+nohup venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port "$PORT" --log-level warning > /dev/null 2>&1 &
 
 sleep 2
-open http://127.0.0.1:8004/Scopion
-
-nohup osascript -e 'tell application "Terminal" to close front window' > /dev/null 2>&1 &
+open "http://127.0.0.1:$PORT/Scopion"
 exit 0
