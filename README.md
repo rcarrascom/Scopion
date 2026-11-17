@@ -79,4 +79,4 @@ real authentication before using real data.
 
 ## Author
 
-Robinson M. Carrasco (RC) - [GitHub](https://github.com/rcarrascom) - [LinkedIn](https://www.linkedin.com/in/robinson-martinez-se/)
+Robinson M. Carrasco (RC) - [GitHub](https://github.com/rcarrascom) - [LinkedIn](https://www.linkedin.com/in/robinson-martinez-a92b5274/)
